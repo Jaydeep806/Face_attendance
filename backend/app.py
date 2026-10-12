@@ -184,7 +184,7 @@ model_manager = ModelManager()
 app = Flask(__name__)
 cors_origins = [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,https://face-attendance-pp5q.onrender.com").split(",")
     if origin.strip()
 ]
 CORS(app, origins=cors_origins)
