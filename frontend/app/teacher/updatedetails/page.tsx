@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 
@@ -124,7 +125,7 @@ export default function TeacherUpdateStudentDetails() {
         }
       });
 
-      const res = await fetch(`http://127.0.0.1:5000/api/teacher/students/search?${params}`, {
+      const res = await fetch(apiUrl(`/api/teacher/students/search?${params}`), {
         headers: {
           "Content-Type": "application/json",
           "X-User-Type": "teacher",
@@ -158,7 +159,7 @@ export default function TeacherUpdateStudentDetails() {
     setStatus("");
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/teacher/student/${selectedStudent._id}`, {
+      const res = await fetch(apiUrl(`/api/teacher/student/${selectedStudent._id}`), {
         headers: {
           "Content-Type": "application/json",
           "X-User-Type": "teacher",
@@ -199,7 +200,7 @@ export default function TeacherUpdateStudentDetails() {
     setStatus("Updating student details...");
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/teacher/student/${student._id}`, {
+      const res = await fetch(apiUrl(`/api/teacher/student/${student._id}`), {
         method: "PUT",
         headers: { 
           "Content-Type": "application/json",
@@ -248,7 +249,7 @@ export default function TeacherUpdateStudentDetails() {
     setStatus("Deleting student...");
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/teacher/student/${student._id}`, {
+      const res = await fetch(apiUrl(`/api/teacher/student/${student._id}`), {
         method: "DELETE",
         headers: { 
           "Content-Type": "application/json",
@@ -309,7 +310,7 @@ export default function TeacherUpdateStudentDetails() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-3xl font-bold text-gray-800">Update Student Details</h1>
-            <p className="text-gray-600">Search and update any student's information</p>
+            <p className="text-gray-600">Search and update any student&apos;s information</p>
           </div>
           <button
             onClick={() => router.push(dashboardPath)}
@@ -641,9 +642,9 @@ export default function TeacherUpdateStudentDetails() {
           <ul className="text-sm text-yellow-700 space-y-1">
             <li>• Use the advanced search filters to find students by ID, name, department, year, or division</li>
             <li>• Click on a student from the search results to select and view their details</li>
-            <li>• Edit any field in the student information form and click "Save Changes"</li>
-            <li>• Use "Reset" to undo unsaved changes</li>
-            <li>• Be careful with the "Delete" option - it cannot be undone</li>
+            <li>• Edit any field in the student information form and click Save Changes</li>
+            <li>• Use Reset to undo unsaved changes</li>
+            <li>• Be careful with the Delete option - it cannot be undone</li>
           </ul>
         </div>
       </div>

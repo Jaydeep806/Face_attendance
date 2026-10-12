@@ -5,16 +5,10 @@ import numpy as np
 from PIL import Image
 import io
 from deepface import DeepFace
-from mtcnn import MTCNN
-from pymongo import MongoClient
 from bson.objectid import ObjectId
 import logging
 
 student_registration_bp = Blueprint("student_registration", __name__)
-client = MongoClient("MONGODB_URI")
-db = client["DATABASE_NAME"]
-students_collection = db["students"]
-detector = MTCNN()
 logger = logging.getLogger(__name__)
 
 def read_image_from_bytes(b):
@@ -22,6 +16,7 @@ def read_image_from_bytes(b):
     return np.array(img)
 
 def detect_faces_rgb(rgb_image):
+    detector = current_app.config["MODEL_MANAGER"].get_detector()
     detections = detector.detect_faces(rgb_image)
     faces = []
     for d in detections:
@@ -49,6 +44,10 @@ def register_student():
     if not data:
         return jsonify({"success": False, "error": "Invalid JSON data"}), 400
 
+    model_manager = current_app.config.get("MODEL_MANAGER")
+    if not model_manager or not model_manager.is_ready():
+        return jsonify({"success": False, "error": "Face recognition models are still initializing"}), 503
+
     # Get logged-in user info from headers
     # Simplified: only validate fields and ensure uniqueness of studentId and email
     db = current_app.config.get("DB")
@@ -72,21 +71,54 @@ def register_student():
         return jsonify({"success": False, "error": "Exactly 5 images are required"}), 400
 
     embeddings = []
+    debug_faces = []
     for idx, img_b64 in enumerate(images):
         try:
             if img_b64.startswith("data:"):
                 img_b64 = img_b64.split(",", 1)[1]
             rgb = read_image_from_bytes(base64.b64decode(img_b64))
         except Exception:
-            return jsonify({"success": False, "error": f"Invalid image data at index {idx}"}), 400
+            return jsonify({
+                "success": False,
+                "error": f"Invalid image data at index {idx}",
+                "debug": {
+                    "images_received": len(images),
+                    "images_processed": len(embeddings),
+                    "faces_detected": debug_faces,
+                    "face_registration_success": False
+                }
+            }), 400
 
         faces = detect_faces_rgb(rgb)
+        debug_faces.append({
+            "image_index": idx,
+            "faces_found": len(faces),
+            "face_detected": len(faces) == 1
+        })
         if len(faces) != 1:
-            return jsonify({"success": False, "error": f"Ensure exactly one face in each image (failed at image {idx+1})"}), 400
+            return jsonify({
+                "success": False,
+                "error": f"Ensure exactly one face in each image (failed at image {idx+1})",
+                "debug": {
+                    "images_received": len(images),
+                    "images_processed": len(embeddings),
+                    "faces_detected": debug_faces,
+                    "face_registration_success": False
+                }
+            }), 400
 
         emb = extract_embedding(faces[0]['face'])
         if emb is None:
-            return jsonify({"success": False, "error": f"Failed to extract face features for image {idx+1}"}), 500
+            return jsonify({
+                "success": False,
+                "error": f"Failed to extract face features for image {idx+1}",
+                "debug": {
+                    "images_received": len(images),
+                    "images_processed": len(embeddings),
+                    "faces_detected": debug_faces,
+                    "face_registration_success": False
+                }
+            }), 500
         embeddings.append(emb.tolist())
 
     student_data = {
@@ -106,7 +138,31 @@ def register_student():
     }
 
     result = students_col.insert_one(student_data)
-    return jsonify({"success": True, "studentId": data['studentId'], "record_id": str(result.inserted_id)})
+
+    # Force recognition cache refresh so the newly registered face is immediately usable
+    try:
+        from student.demo_session import embedding_cache
+        embedding_cache.student_embeddings = None
+        embedding_cache.last_update = 0
+    except Exception:
+        pass
+
+    logger = logging.getLogger(__name__)
+    logger.info("Face registration debug: studentId=%s, images=%s, embeddings_saved=%s, face_detected=%s", 
+                data['studentId'], len(images), len(embeddings), all(item['face_detected'] for item in debug_faces))
+
+    return jsonify({
+        "success": True,
+        "studentId": data['studentId'],
+        "record_id": str(result.inserted_id),
+        "debug": {
+            "images_received": len(images),
+            "images_processed": len(embeddings),
+            "faces_detected": debug_faces,
+            "embeddings_saved": len(embeddings),
+            "face_registration_success": True
+        }
+    })
 
 @student_registration_bp.route('/api/students/count', methods=['GET'])
 def get_student_count():

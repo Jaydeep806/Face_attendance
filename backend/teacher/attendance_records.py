@@ -5,10 +5,11 @@ import base64
 import numpy as np
 from flask import Blueprint, request, jsonify, current_app
 from bson.objectid import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image
 from scipy.spatial.distance import cosine
 from deepface import DeepFace
+from student.demo_session import faces_from_client_boxes
 import logging
 import time
 
@@ -86,6 +87,76 @@ def extract_embedding_optimized(face_rgb):
 def get_attendance_collection():
     """Get the attendance collection from app config"""
     return current_app.config.get("ATTENDANCE_COLLECTION")
+
+def is_exit_phase_open(session_doc, now=None):
+    if session_doc.get("exit_phase_started_at"):
+        return True
+
+    duration = int(session_doc.get("exit_timer_minutes") or 0)
+    created_at = session_doc.get("created_at")
+    if duration <= 0 or not created_at:
+        return False
+
+    return (now or datetime.now()) >= created_at + timedelta(minutes=duration)
+
+def get_exit_progress(session_doc):
+    entered_students = [
+        student for student in session_doc.get("students", [])
+        if student.get("entry_present")
+    ]
+    pending_exit_count = sum(1 for student in entered_students if not student.get("exit_present"))
+    return {
+        "entry_marked_count": len(entered_students),
+        "exit_marked_count": len(entered_students) - pending_exit_count,
+        "pending_exit_count": pending_exit_count,
+    }
+
+def finalize_attendance_session(collection, students_col, session_id, session_doc):
+    present_students = {
+        student.get("student_id")
+        for student in session_doc.get("students", [])
+        if student.get("present")
+    }
+    student_filter = {
+        key: session_doc[key]
+        for key in ("department", "year", "division")
+        if session_doc.get(key)
+    }
+    all_students = list(students_col.find(student_filter)) if student_filter else []
+    absent_count = 0
+
+    for student in all_students:
+        student_id = student.get("studentId") or student.get("student_id")
+        student_name = student.get("studentName") or student.get("student_name")
+        if student_id in present_students:
+            continue
+
+        updated = collection.update_one(
+            {"_id": session_id, "students.student_id": student_id},
+            {"$set": {"students.$.present": False, "students.$.marked_at": None}},
+        )
+        if updated.matched_count == 0:
+            collection.update_one(
+                {"_id": session_id},
+                {"$push": {"students": {
+                    "student_id": student_id,
+                    "student_name": student_name,
+                    "present": False,
+                    "marked_at": None,
+                }}},
+            )
+        absent_count += 1
+
+    collection.update_one(
+        {"_id": session_id},
+        {"$set": {"finalized": True, "ended_at": datetime.now()}},
+    )
+    logger.info("Session finalized: %s present, %s absent", len(present_students), absent_count)
+    return {
+        "present_count": len(present_students),
+        "absent_count": absent_count,
+        "total_students": len(all_students),
+    }
 
 # Enhanced embedding cache for attendance sessions
 class AttendanceEmbeddingCache:
@@ -183,6 +254,13 @@ def create_session():
     db = current_app.config.get("DB")
     students_col = db.students
 
+    exit_timer_minutes = data.get("exit_timer_minutes")
+    try:
+        exit_timer_minutes = max(0, int(exit_timer_minutes)) if exit_timer_minutes is not None else 0
+    except (TypeError, ValueError):
+        exit_timer_minutes = 0
+
+    created_at = datetime.now()
     # Build base session document
     session_doc = {
         "date": data.get("date"),
@@ -190,7 +268,9 @@ def create_session():
         "department": data.get("department"),
         "year": data.get("year"),
         "division": data.get("division"),
-        "created_at": datetime.now(),
+        "exit_timer_minutes": exit_timer_minutes,
+        "created_at": created_at,
+        "exit_phase_started_at": None,
         "finalized": False,
         "ended_at": None,
         "students": []
@@ -222,11 +302,45 @@ def create_session():
 
     collection = get_attendance_collection()
     session_id = collection.insert_one(session_doc).inserted_id
-    return jsonify({"session_id": str(session_id), "students_count": len(session_doc["students"])})
+    exit_opens_at = (
+        created_at + timedelta(minutes=exit_timer_minutes)
+        if exit_timer_minutes > 0 else None
+    )
+    return jsonify({
+        "session_id": str(session_id),
+        "students_count": len(session_doc["students"]),
+        "exit_opens_at": exit_opens_at.astimezone().isoformat() if exit_opens_at else None,
+    })
+
+@attendance_session_bp.route("/enable_exit", methods=["POST"])
+def enable_exit_phase():
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    if not session_id:
+        return jsonify({"error": "Missing session_id"}), 400
+
+    try:
+        collection = get_attendance_collection()
+        session_key = ObjectId(session_id)
+        session_doc = collection.find_one({"_id": session_key})
+        if not session_doc:
+            return jsonify({"error": "Session not found"}), 404
+        if session_doc.get("finalized"):
+            return jsonify({"error": "Session already finalized"}), 400
+
+        started_at = session_doc.get("exit_phase_started_at") or datetime.now()
+        collection.update_one(
+            {"_id": session_key, "finalized": {"$ne": True}},
+            {"$set": {"exit_phase_started_at": started_at}},
+        )
+        return jsonify({"success": True, "exit_phase_open": True})
+    except Exception as exc:
+        logger.error("Error opening exit phase: %s", exc)
+        return jsonify({"error": "Unable to open exit phase"}), 500
 
 @attendance_session_bp.route("/end_session", methods=["POST"])
 def end_session():
-    """Finalize an attendance session with enhanced logging"""
+    """Finalize after every entry-marked student has exited."""
     data = request.get_json()
     session_id = data.get("session_id")
     if not session_id:
@@ -237,72 +351,161 @@ def end_session():
         db = current_app.config.get("DB")
         students_col = db.students
 
-        session_doc = collection.find_one({"_id": ObjectId(session_id)})
+        session_key = ObjectId(session_id)
+        session_doc = collection.find_one({"_id": session_key})
         if not session_doc:
             return jsonify({"error": "Session not found"}), 404
+        if session_doc.get("finalized"):
+            return jsonify({"error": "Session already finalized"}), 400
+        if not is_exit_phase_open(session_doc):
+            return jsonify({"error": "The exit phase is not open yet"}), 409
 
-        # Build set of present student ids
-        present_students = set(
-            s.get("student_id") for s in session_doc.get("students", []) 
-            if s.get("present")
-        )
+        progress = get_exit_progress(session_doc)
+        if progress["pending_exit_count"]:
+            return jsonify({
+                "error": f"{progress['pending_exit_count']} student(s) with recorded entry still need to scan out",
+                "session_progress": progress,
+            }), 409
 
-        # Get all students in that class
-        student_filter = {}
-        if session_doc.get("department"): student_filter["department"] = session_doc.get("department")
-        if session_doc.get("year"): student_filter["year"] = session_doc.get("year")
-        if session_doc.get("division"): student_filter["division"] = session_doc.get("division")
-
-        all_students = list(students_col.find(student_filter)) if student_filter else []
-        
-        # Mark absent students
-        absent_count = 0
-        for s in all_students:
-            sid = s.get("studentId") or s.get("student_id")
-            sname = s.get("studentName") or s.get("student_name")
-            
-            if sid not in present_students:
-                # Update existing entry or create new absent entry
-                updated = collection.update_one(
-                    {"_id": ObjectId(session_id), "students.student_id": sid},
-                    {"$set": {"students.$.present": False, "students.$.marked_at": None}}
-                )
-                
-                if updated.matched_count == 0:
-                    # No existing entry, add new absent entry
-                    collection.update_one(
-                        {"_id": ObjectId(session_id)},
-                        {"$push": {
-                            "students": {
-                                "student_id": sid, 
-                                "student_name": sname, 
-                                "present": False, 
-                                "marked_at": None
-                            }
-                        }}
-                    )
-                absent_count += 1
-
-        # Mark session as finalized
-        collection.update_one(
-            {"_id": ObjectId(session_id)}, 
-            {"$set": {"finalized": True, "ended_at": datetime.now()}}
-        )
-
-        logger.info(f"Session finalized: {len(present_students)} present, {absent_count} absent")
+        statistics = finalize_attendance_session(collection, students_col, session_key, session_doc)
 
         return jsonify({
             "success": True,
-            "statistics": {
-                "present_count": len(present_students),
-                "absent_count": absent_count,
-                "total_students": len(all_students)
-            }
+            "statistics": statistics,
         })
 
     except Exception as e:
         logger.error(f"Error ending session: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@attendance_session_bp.route("/mark_entry_exit", methods=["POST"])
+def mark_entry_exit_attendance():
+    """Mark entry or exit attendance for a detected face using the teacher's configured timer."""
+    data = request.get_json() or {}
+    session_id = data.get("session_id")
+    image_b64 = data.get("image")
+    mark_type = (data.get("mark_type") or "entry").lower()
+
+    if not session_id or not image_b64:
+        return jsonify({"error": "Missing session_id or image"}), 400
+    if mark_type not in {"entry", "exit"}:
+        return jsonify({"error": "mark_type must be 'entry' or 'exit'"}), 400
+
+    model_manager = current_app.config.get("MODEL_MANAGER")
+    if not model_manager or not model_manager.is_ready():
+        return jsonify({"error": "Face recognition models not initialized"}), 503
+
+    detector = model_manager.get_detector()
+    collection = get_attendance_collection()
+    session_doc = collection.find_one({"_id": ObjectId(session_id)})
+    if not session_doc:
+        return jsonify({"error": "Session not found"}), 404
+    if session_doc.get("finalized"):
+        return jsonify({"error": "Session already finalized"}), 400
+
+    exit_phase_open = is_exit_phase_open(session_doc)
+    if mark_type == "entry" and exit_phase_open:
+        return jsonify({"error": "Entry is closed; the exit phase is open"}), 409
+    if mark_type == "exit" and not exit_phase_open:
+        return jsonify({"error": "Exit is available after the session timer ends or the teacher opens the exit phase"}), 409
+
+    try:
+        rgb = read_image_from_base64_optimized(image_b64)
+        faces = faces_from_client_boxes(rgb, data.get("face_boxes"))
+        if faces is None:
+            faces = detect_faces_optimized(rgb, detector)
+    except Exception as exc:
+        logger.error(f"Entry/exit image processing error: {exc}")
+        return jsonify({"error": "Invalid image data"}), 400
+
+    if len(faces) == 0:
+        return jsonify({"success": True, "faces": [], "debug": {"face_detected": False, "mark_type": mark_type}})
+
+    db = current_app.config.get("DB")
+    students_col = db.students
+    threshold = float(current_app.config.get("THRESHOLD", 0.6))
+    students = list(students_col.find({"embeddings": {"$exists": True, "$ne": None}}))
+    results = []
+
+    for face in faces:
+        emb = extract_embedding_optimized(face["face"])
+        if emb is None:
+            results.append({"match": None, "distance": None, "box": face["box"], "status": "embedding_error"})
+            continue
+
+        best, min_d = None, float("inf")
+        for student in students:
+            stored_embeddings = student.get("embeddings", [])
+            if not stored_embeddings:
+                continue
+            avg_embedding = np.mean(stored_embeddings, axis=0) if isinstance(stored_embeddings, list) and len(stored_embeddings) > 0 else np.array(stored_embeddings)
+            d = cosine(emb, avg_embedding)
+            if d < min_d:
+                min_d = d
+                best = student
+
+        if not best or min_d >= threshold:
+            results.append({"match": None, "distance": round(float(min_d), 4) if min_d != float('inf') else None, "box": face["box"], "status": "no_match"})
+            continue
+
+        student_id = best.get("studentId")
+        student_name = best.get("studentName")
+        student_entry = next((entry for entry in session_doc.get("students", []) if entry.get("student_id") == student_id), None)
+
+        if not student_entry:
+            collection.update_one(
+                {"_id": ObjectId(session_id)},
+                {"$push": {"students": {"student_id": student_id, "student_name": student_name, "entry_present": False, "exit_present": False, "present": False, "marked_at": None, "entry_marked_at": None, "exit_marked_at": None}}}
+            )
+            session_doc = collection.find_one({"_id": ObjectId(session_id)})
+            student_entry = next((entry for entry in session_doc.get("students", []) if entry.get("student_id") == student_id), None)
+
+        if mark_type == "entry":
+            if student_entry.get("entry_present"):
+                results.append({"match": {"user_id": student_id, "name": student_name}, "distance": round(float(min_d), 4), "box": face["box"], "status": "duplicate", "message": "Entry already marked"})
+                continue
+            collection.update_one(
+                {"_id": ObjectId(session_id), "students.student_id": student_id},
+                {"$set": {"students.$.entry_present": True, "students.$.entry_marked_at": datetime.now(), "students.$.present": True, "students.$.marked_at": datetime.now()}}
+            )
+            results.append({"match": {"user_id": student_id, "name": student_name}, "distance": round(float(min_d), 4), "box": face["box"], "status": "entry_marked", "message": "Entry attendance marked"})
+        else:
+            if not student_entry.get("entry_present"):
+                results.append({"match": {"user_id": student_id, "name": student_name}, "distance": round(float(min_d), 4), "box": face["box"], "status": "entry_required", "message": "Entry must be marked before exit"})
+                continue
+
+            if student_entry.get("exit_present"):
+                results.append({"match": {"user_id": student_id, "name": student_name}, "distance": round(float(min_d), 4), "box": face["box"], "status": "duplicate", "message": "Exit already marked"})
+                continue
+
+            collection.update_one(
+                {"_id": ObjectId(session_id), "students.student_id": student_id},
+                {"$set": {"students.$.exit_present": True, "students.$.exit_marked_at": datetime.now()}}
+            )
+            results.append({"match": {"user_id": student_id, "name": student_name}, "distance": round(float(min_d), 4), "box": face["box"], "status": "exit_marked", "message": "Exit attendance marked"})
+
+    session_key = ObjectId(session_id)
+    session_doc = collection.find_one({"_id": session_key}) or session_doc
+    session_progress = get_exit_progress(session_doc)
+    session_ended = False
+    statistics = None
+    if (
+        mark_type == "exit"
+        and session_progress["entry_marked_count"] > 0
+        and session_progress["pending_exit_count"] == 0
+    ):
+        statistics = finalize_attendance_session(collection, db.students, session_key, session_doc)
+        session_ended = True
+
+    return jsonify({
+        "success": True,
+        "mark_type": mark_type,
+        "faces": results,
+        "session_progress": session_progress,
+        "session_ended": session_ended,
+        "statistics": statistics,
+        "debug": {"face_detected": len(faces) > 0, "mark_type": mark_type, "matches_found": sum(1 for item in results if item.get("match"))},
+    })
 
 @attendance_session_bp.route("/real-mark", methods=["POST"])
 def mark_attendance_with_duplicate_prevention():
@@ -326,7 +529,9 @@ def mark_attendance_with_duplicate_prevention():
     try:
         # Use same image processing as demo
         rgb = read_image_from_base64_optimized(image_b64)
-        faces = detect_faces_optimized(rgb, detector)
+        faces = faces_from_client_boxes(rgb, data.get("face_boxes"))
+        if faces is None:
+            faces = detect_faces_optimized(rgb, detector)
 
         if len(faces) == 0:
             return jsonify({"message": "No faces detected", "faces": []})

@@ -1,5 +1,21 @@
 TrainingImage/
 TrainingImageLabel/
+
+# Node and Next.js build output
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Local configuration and editor files
+.env.*
+!.env.example
+.idea/
+
+# Local student data and generated artifacts
+StudentDetails/
+*.stackdump
+
 # Byte-compiled / optimized / DLL files
 __pycache__/*
 *.py[cod]

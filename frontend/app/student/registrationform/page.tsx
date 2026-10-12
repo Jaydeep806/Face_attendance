@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import MultiCameraCapture from "../../components/MultiCameraCapture";
@@ -115,7 +116,7 @@ export default function StudentRegistrationForm() {
     setStatus("Registering student...");
     try {
       const headerEmail = (typeof window !== 'undefined' && localStorage.getItem('userEmail')) || formData.email;
-      const res = await fetch("http://127.0.0.1:5000/api/register-student", {
+      const res = await fetch(apiUrl("/api/register-student"), {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -308,7 +309,7 @@ interface InputProps {
   name: string;
   value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
   placeholder?: string;
   type?: string;
@@ -340,7 +341,7 @@ interface SelectProps {
   name: string;
   value: string;
   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
   options: string[];
   placeholder?: string;

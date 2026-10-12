@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { 
@@ -9,7 +10,8 @@ import {
   BarChart3, 
   LogOut,
   Menu,
-  X
+  X,
+  Clock3
 } from "lucide-react";
 
 export default function TeacherDashboard() {
@@ -50,7 +52,7 @@ export default function TeacherDashboard() {
 
   const handleLogout = async () => {
     try {
-      await fetch("http://127.0.0.1:5000/api/logout", {
+      await fetch(apiUrl("/api/logout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -89,6 +91,15 @@ export default function TeacherDashboard() {
       color: "from-purple-500 to-purple-600",
       bgColor: "bg-purple-50 hover:bg-purple-100",
       borderColor: "border-purple-200 hover:border-purple-300"
+    },
+    {
+      title: "Entry & Exit Attendance",
+      description: "Mark entry and exit attendance with a teacher-configured exit timer",
+      icon: <Clock3 className="w-7 h-7" />,
+      path: "/teacher/entry-exit",
+      color: "from-rose-500 to-pink-600",
+      bgColor: "bg-rose-50 hover:bg-rose-100",
+      borderColor: "border-rose-200 hover:border-rose-300"
     },
     {
       title: "Attendance Records",

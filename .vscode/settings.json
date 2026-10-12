@@ -1,10 +1,6 @@
 {
-    "python.pythonPath": "C:\\Users\\patel\\AppData\\Local\\Programs\\Python\\Python36-32\\python.exe",
     "extensions.ignoreRecommendations": true,
     "files.autoSave": "off",
-    "debug.allowBreakpointsEverywhere": true
-    "files.autoSave": "off",
-    "debug.allowBreakpointsEverywhere": true
-    "files.autoSave": "off",
-    "debug.allowBreakpointsEverywhere": true
+    "debug.allowBreakpointsEverywhere": true,
+    "typescript.tsdk": "./frontend/node_modules/typescript/lib"
 }

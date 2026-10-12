@@ -1,16 +1,22 @@
 import cv2
+import os
 from mtcnn import MTCNN
 from deepface import DeepFace
 from pymongo import MongoClient
+from dotenv import load_dotenv
 from scipy.spatial.distance import cosine
 import numpy as np
 import time
 
 # ----------------- MongoDB Setup -----------------
-MONGODB_URI = "mongodb+srv://Kamlesh-21:Guru2004@attendencesystem.nlapsic.mongodb.net/Attendencesystem?retryWrites=true&w=majority&appName=Attendencesystem"
+load_dotenv()
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise RuntimeError("MONGODB_URI must be set before running recognition")
+
 client = MongoClient(MONGODB_URI)
-db = client['facerecognition_db']
-collection = db['users']
+db = client[os.getenv("DATABASE_NAME", "facerecognition_db")]
+collection = db[os.getenv("COLLECTION_NAME", "users")]
 
 # ----------------- Face Detector -----------------
 detector = MTCNN()

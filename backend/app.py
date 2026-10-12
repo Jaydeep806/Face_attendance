@@ -71,17 +71,30 @@ class ModelManager:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._initialize_models()
+                    cls._instance.models_ready = False
+                    cls._instance.detector = None
+                    cls._instance.deepface_ready = False
+                    cls._instance.initialization_started = False
+                    cls._instance.initialization_error = None
+                    cls._instance._initialization_lock = threading.Lock()
         return cls._instance
+
+    def start_initialization(self):
+        with self._initialization_lock:
+            if self.initialization_started:
+                return
+            self.initialization_started = True
+
+        threading.Thread(
+            target=self._initialize_models,
+            name="face-model-initialization",
+            daemon=True,
+        ).start()
 
     def _initialize_models(self):
         """Initialize all face recognition models with proper error handling"""
         logger.info("🤖 Starting model initialization...")
         start_time = time.time()
-
-        self.models_ready = False
-        self.detector = None
-        self.deepface_ready = False
 
         try:
             # 1. Initialize MTCNN detector with optimized parameters
@@ -123,9 +136,9 @@ class ModelManager:
             logger.info(f"🎉 All models initialized successfully in {initialization_time:.2f} seconds")
 
         except Exception as e:
-            logger.error(f"❌ Model initialization failed: {e}")
+            self.initialization_error = str(e)
             self.models_ready = False
-            raise e
+            logger.exception("Face recognition model initialization failed")
 
     def get_detector(self):
         """Get the MTCNN detector instance"""
@@ -169,7 +182,12 @@ model_manager = ModelManager()
 
 # Flask app
 app = Flask(__name__)
-CORS(app)
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
+CORS(app, origins=cors_origins)
 
 # Configure Flask app with database and model instances
 app.config["DB"] = db
@@ -179,21 +197,18 @@ app.config["ATTENDANCE_COLLECTION"] = attendance_collection
 
 # CRITICAL: Pass model manager to Flask config so blueprints can access it
 app.config["MODEL_MANAGER"] = model_manager
-app.config["MTCNN_DETECTOR"] = model_manager.get_detector()
 
 bcrypt = Bcrypt(app)
 
 # Health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint to verify model status"""
+    """Return readiness without running an extra model inference."""
     model_status = model_manager.is_ready()
-    model_health = model_manager.health_check()
 
     return {
-        "status": "healthy" if model_status and model_health else "unhealthy",
+        "status": "ready" if model_status else "starting",
         "models_ready": model_status,
-        "models_healthy": model_health,
         "timestamp": time.time()
     }
 
@@ -225,13 +240,10 @@ logger.info("\nRegistered Flask Routes:")
 for rule in app.url_map.iter_rules():
     logger.info(f"  {rule}")
 
+model_manager.start_initialization()
+
 if __name__ == "__main__":
     logger.info("🚀 Starting Flask server...")
-
-    # Final model verification before starting
-    if model_manager.is_ready():
-        logger.info("🎯 All systems ready! Server starting on http://0.0.0.0:5000")
-        app.run(host="0.0.0.0", port=5000, debug=False)  # Set debug=False for production
-    else:
-        logger.error("❌ Cannot start server - models not ready")
-        exit(1)
+    port = int(os.getenv("PORT", "5000"))
+    logger.info("Server starting on http://0.0.0.0:%s while models initialize", port)
+    app.run(host="0.0.0.0", port=port, debug=False)

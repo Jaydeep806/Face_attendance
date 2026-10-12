@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 // XLSX is dynamically imported in the browser-only export function to avoid
@@ -48,28 +49,29 @@ export default function ViewAttendance() {
       if (filterSubject) params.set("subject", filterSubject);
       if (filterStudentId) params.set("student_id", filterStudentId);
 
-      const res = await fetch(`http://127.0.0.1:5000/api/attendance?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/attendance?${params.toString()}`));
       const raw = await res.text();
-      let data: any;
+      let data: Record<string, unknown> | null = null;
       try {
-        data = JSON.parse(raw);
+        data = JSON.parse(raw) as Record<string, unknown>;
       } catch (err) {
         console.error("Failed to parse /api/attendance response as JSON. status=", res.status, "body=", raw);
         throw err;
       }
 
       if (data && data.success) {
-        const mappedData: AttendanceRecord[] = data.attendance.map((record: any, idx: number) => ({
-          _id: record.studentId || `row-${idx}`,
-          studentId: record.studentId || record.student_id || "-",
-          studentName: record.studentName || record.student_name || "-",
-          date: record.date || data.date || selectedDate,
-          time: record.markedAt || record.time || "-",
-          status: record.status || "present",
-          confidence: record.confidence || 0,
+        const attendanceList = Array.isArray(data.attendance) ? data.attendance : [];
+        const mappedData: AttendanceRecord[] = attendanceList.map((record: Record<string, unknown>, idx: number) => ({
+          _id: String(record.studentId ?? `row-${idx}`),
+          studentId: String(record.studentId ?? record.student_id ?? "-"),
+          studentName: String(record.studentName ?? record.student_name ?? "-"),
+          date: String(record.date ?? data.date ?? selectedDate),
+          time: String(record.markedAt ?? record.time ?? "-"),
+          status: (record.status as AttendanceRecord["status"]) || "present",
+          confidence: Number(record.confidence ?? 0),
         }));
         setAttendanceData(mappedData);
-        setStats(data.stats);
+        setStats((data.stats as typeof stats) ?? stats);
       }
       setSearched(true);
     } catch (error) {
@@ -88,11 +90,11 @@ export default function ViewAttendance() {
       if (filterDivision) params.set("division", filterDivision);
       if (filterSubject) params.set("subject", filterSubject);
 
-      const res = await fetch(`http://127.0.0.1:5000/api/attendance/export?${params.toString()}`);
+      const res = await fetch(apiUrl(`/api/attendance/export?${params.toString()}`));
       const raw = await res.text();
-      let data: any;
+      let data: Record<string, unknown> | null = null;
       try {
-        data = JSON.parse(raw);
+        data = JSON.parse(raw) as Record<string, unknown>;
       } catch (err) {
         console.error("Failed to parse /api/attendance/export response as JSON. status=", res.status, "body=", raw);
         throw err;
@@ -100,7 +102,8 @@ export default function ViewAttendance() {
       if (data && data.success) {
         // Dynamic import so bundlers (Next.js SSR) don't try to include node-only deps
         const XLSX = await import("xlsx");
-        const worksheet = XLSX.utils.json_to_sheet(data.data);
+        const exportRows = Array.isArray(data.data) ? data.data : [];
+        const worksheet = XLSX.utils.json_to_sheet(exportRows);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
         XLSX.writeFile(workbook, `attendance_${selectedDate || "export"}.xlsx`);

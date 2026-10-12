@@ -211,7 +211,7 @@ export default function PricingSection() {
               Need a Custom Solution?
             </h3>
             <p className="text-slate-600 text-lg mb-6 leading-relaxed">
-              Contact our sales team for custom pricing, features, and deployment options tailored to your institution's specific needs.
+              Contact our sales team for custom pricing, features, and deployment options tailored to your institution&apos;s specific needs.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <button className="flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-slate-700 to-slate-800 text-white font-semibold rounded-2xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-300">

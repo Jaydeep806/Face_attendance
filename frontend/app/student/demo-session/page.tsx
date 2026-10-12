@@ -1,9 +1,10 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, ArrowLeft, Play, Square, User, BarChart3 } from "lucide-react";
-import CameraCapture, { FaceData } from "../../components/CameraCapture";
+import CameraCapture, { CapturedFaceBox } from "../../components/CameraCapture";
 
 interface RecognizeResult {
   match: { user_id: string; name: string } | null;
@@ -18,16 +19,21 @@ export default function DemoSession() {
   const [lastResult, setLastResult] = useState<RecognizeResult | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
 
-  const handleRecognize = useCallback(async (dataUrl: string) => {
+  const handleRecognize = useCallback(async (dataUrl: string, faceBoxes: CapturedFaceBox[]) => {
     if (!isLiveActive) return;
 
     try {
-      const res = await fetch("http://127.0.0.1:5000/api/demo/recognize", {
+      const res = await fetch(apiUrl("/api/demo/recognize"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: dataUrl }),
+        body: JSON.stringify({ image: dataUrl, face_boxes: faceBoxes }),
       });
       const data = await res.json();
+      console.log("Recognition debug payload:", data);
+
+      if (data.debug && data.debug.face_detected === false) {
+        console.warn("Face detection debug:", data.debug.message || "No face detected");
+      }
 
       if (data.success && data.faces && data.faces.length > 0) {
         const face = data.faces[0];
@@ -267,7 +273,7 @@ export default function DemoSession() {
                   <ul className="text-slate-600 text-sm space-y-2">
                     <li className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Click "Start Demo" to begin face recognition
+                      Click Start Demo to begin face recognition
                     </li>
                     <li className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
@@ -279,7 +285,7 @@ export default function DemoSession() {
                     </li>
                     <li className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                      Click "Stop Demo" to end the session
+                      Click Stop Demo to end the session
                     </li>
                   </ul>
                 </div>

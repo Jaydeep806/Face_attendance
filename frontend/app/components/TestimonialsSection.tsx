@@ -103,7 +103,7 @@ export default function TestimonialsSection() {
 
                 {/* Testimonial Content */}
                 <blockquote className="text-2xl sm:text-3xl text-slate-800 font-medium leading-relaxed mb-8 transition-all duration-500">
-                  "{testimonials[activeTestimonial].content}"
+                  {testimonials[activeTestimonial].content}
                 </blockquote>
 
                 {/* Author Info */}
@@ -161,7 +161,7 @@ export default function TestimonialsSection() {
 
               {/* Content */}
               <p className="text-slate-700 text-sm leading-relaxed mb-4 line-clamp-3">
-                "{testimonial.content}"
+                {testimonial.content}
               </p>
 
               {/* Author */}

@@ -2,6 +2,7 @@
 from flask import Blueprint, request, jsonify, current_app
 import time
 import base64
+import math
 import numpy as np
 from PIL import Image
 import io
@@ -44,6 +45,37 @@ def detect_faces_rgb_optimized(rgb_image, detector):
                     "face": face_rgb, 
                     "confidence": d["confidence"]
                 })
+
+    return faces
+
+def faces_from_client_boxes(rgb_image, boxes):
+    if not isinstance(boxes, list) or len(boxes) > 10:
+        return None
+
+    image_height, image_width = rgb_image.shape[:2]
+    faces = []
+    for box in boxes:
+        if not isinstance(box, dict):
+            return None
+        try:
+            x, y, width, height = (float(box[key]) for key in ("x", "y", "width", "height"))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not all(math.isfinite(value) for value in (x, y, width, height)) or width <= 0 or height <= 0:
+            return None
+
+        left = max(0, min(image_width, int(x)))
+        top = max(0, min(image_height, int(y)))
+        right = max(left, min(image_width, int(x + width)))
+        bottom = max(top, min(image_height, int(y + height)))
+        if right - left < 32 or bottom - top < 32:
+            continue
+
+        faces.append({
+            "box": (left, top, right - left, bottom - top),
+            "face": rgb_image[top:bottom, left:right],
+            "confidence": 1.0,
+        })
 
     return faces
 
@@ -166,34 +198,46 @@ def demo_recognize_optimized():
         logger.error(f"Image processing error: {e}")
         return jsonify({"success": False, "error": "Invalid base64 image"}), 400
 
-    # Face detection with timing
+    # Reuse the browser's live detector boxes when available to avoid a second detector pass.
     detection_start = time.time()
-    faces = detect_faces_rgb_optimized(rgb, detector)
+    faces = faces_from_client_boxes(rgb, data.get("face_boxes"))
+    if faces is None:
+        faces = detect_faces_rgb_optimized(rgb, detector)
     detection_time = time.time() - detection_start
 
     if len(faces) == 0:
+        logger.info("Face detection debug: no face found in image, threshold=%s", threshold)
         return jsonify({
-            "success": True, 
+            "success": True,
             "faces": [],
             "processing_time": round(time.time() - start_time, 3),
-            "detection_time": round(detection_time, 3)
+            "detection_time": round(detection_time, 3),
+            "debug": {
+                "face_detected": False,
+                "faces_found": 0,
+                "embedding_extracted": False,
+                "matches_found": 0,
+                "threshold": threshold,
+                "message": "No face detected in the submitted image"
+            }
         })
 
     results = []
 
     # Process each detected face
-    for f in faces:
+    for idx, f in enumerate(faces):
         embedding_start = time.time()
         emb = extract_embedding_optimized(f["face"])
         embedding_time = time.time() - embedding_start
 
         if emb is None:
             results.append({
-                "match": None, 
-                "distance": None, 
+                "match": None,
+                "distance": None,
                 "box": f["box"],
                 "error": "Failed to extract embedding"
             })
+            logger.info("Face detection debug: face #%s detected but embedding extraction failed", idx + 1)
             continue
 
         # Search for best match with timing
@@ -201,40 +245,64 @@ def demo_recognize_optimized():
         best_match, min_distance = find_best_match_optimized(emb, students_col, threshold)
         search_time = time.time() - search_start
 
+        distance_value = float(min_distance) if min_distance is not None and math.isfinite(float(min_distance)) else None
+        confidence_value = round((1 - distance_value) * 100, 1) if distance_value is not None else None
+
         if best_match:
-            results.append({
+            result_item = {
                 "match": {
-                    "user_id": best_match["studentId"], 
+                    "user_id": best_match["studentId"],
                     "name": best_match["studentName"]
                 },
-                "distance": round(float(min_distance), 4),
-                "confidence": round((1 - min_distance) * 100, 1),
+                "distance": round(distance_value, 4) if distance_value is not None else None,
+                "confidence": confidence_value,
                 "box": f["box"],
                 "timing": {
                     "embedding": round(embedding_time, 3),
                     "search": round(search_time, 3)
                 }
-            })
+            }
         else:
-            results.append({
-                "match": None, 
-                "distance": round(float(min_distance), 4), 
+            result_item = {
+                "match": None,
+                "distance": None,
+                "confidence": None,
                 "box": f["box"],
                 "timing": {
                     "embedding": round(embedding_time, 3),
                     "search": round(search_time, 3)
                 }
-            })
+            }
+
+        results.append(result_item)
+        logger.info(
+            "Face detection debug: face #%s => detected=%s, embedding_extracted=%s, matched=%s, distance=%s, threshold=%s",
+            idx + 1,
+            True,
+            True,
+            best_match is not None,
+            distance_value,
+            threshold
+        )
 
     total_time = time.time() - start_time
+    match_count = sum(1 for item in results if item.get("match") is not None)
 
     return jsonify({
-        "success": True, 
-        "faces": results, 
+        "success": True,
+        "faces": results,
         "processing_time": round(total_time, 3),
         "detailed_timing": {
             "detection": round(detection_time, 3),
             "total": round(total_time, 3)
+        },
+        "debug": {
+            "face_detected": len(faces) > 0,
+            "faces_found": len(faces),
+            "embedding_extracted": True,
+            "matches_found": match_count,
+            "threshold": threshold,
+            "message": "Face detection and recognition completed"
         },
         "performance_info": {
             "models_preloaded": True,

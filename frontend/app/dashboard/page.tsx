@@ -1,5 +1,6 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { 
@@ -49,7 +50,7 @@ export default function DashboardPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch("http://127.0.0.1:5000/api/logout", {
+      await fetch(apiUrl("/api/logout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });

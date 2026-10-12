@@ -99,10 +99,10 @@ export default function ContactSection() {
           <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
         </div>
         <h2 className="text-3xl sm:text-4xl font-bold text-slate-800 mb-4 tracking-tight">
-          Let's Start a Conversation
+          Let&apos;s Start a Conversation
         </h2>
         <p className="text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
-          Ready to revolutionize your identification system? We're here to help you get started.
+          Ready to revolutionize your identification system? We&apos;re here to help you get started.
         </p>
       </div>
 
@@ -112,8 +112,8 @@ export default function ContactSection() {
           <div>
             <h3 className="text-2xl font-bold text-slate-800 mb-6">Get in Touch</h3>
             <p className="text-slate-600 leading-relaxed mb-8">
-              Have questions about our facial recognition system? Need a custom solution? 
-              Our team of experts is ready to help you implement the perfect identification 
+              Have questions about our facial recognition system? Need a custom solution?
+              Our team of experts is ready to help you implement the perfect identification
               system for your needs.
             </p>
           </div>

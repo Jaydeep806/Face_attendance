@@ -1,9 +1,10 @@
 "use client";
 
+import { apiUrl } from "@/lib/api";
 import React, { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, ArrowLeft, Play, Square, User, Calendar, BookOpen, GraduationCap, Users, CheckCircle2 } from "lucide-react";
-import CameraCapture, { FaceData } from "../../components/CameraCapture";
+import CameraCapture, { CapturedFaceBox, FaceData } from "../../components/CameraCapture";
 
 export default function DemoSessionPage() {
   const router = useRouter();
@@ -20,6 +21,7 @@ export default function DemoSessionPage() {
     department: "",
     year: "",
     division: "",
+    exit_timer_minutes: "15",
   });
 
   const departments = ["Computer Science", "IT", "Electronics", "Mechanical", "Civil"];
@@ -38,7 +40,7 @@ export default function DemoSessionPage() {
 
     setStatus("Creating session...");
     try {
-      const res = await fetch("http://localhost:5000/api/attendance/create_session", {
+      const res = await fetch(apiUrl("/api/attendance/create_session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
@@ -58,9 +60,9 @@ export default function DemoSessionPage() {
   };
 
   const handleRecognize = useCallback(
-    async (imageDataUrl: string) => {
+    async (imageDataUrl: string, faceBoxes: CapturedFaceBox[]) => {
       // Build payload: include session_id when available, otherwise include filters for demo recognition
-      const payload: any = { image: imageDataUrl };
+      const payload: Record<string, unknown> = { image: imageDataUrl, face_boxes: faceBoxes };
       if (sessionId) payload.session_id = sessionId;
       else {
         // include optional filters from the form for candidate narrowing
@@ -70,7 +72,7 @@ export default function DemoSessionPage() {
       }
 
       try {
-        const res = await fetch("http://localhost:5000/api/attendance/real-mark", {
+        const res = await fetch(apiUrl("/api/attendance/real-mark"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -312,6 +314,21 @@ export default function DemoSessionPage() {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="text-gray-700 text-sm mb-2 block font-medium">Exit timer (minutes)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="5"
+                      name="exit_timer_minutes"
+                      value={form.exit_timer_minutes}
+                      onChange={handleChange}
+                      className="w-full p-3 rounded-lg bg-white/60 border border-gray-200 text-gray-800 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
+                      placeholder="15"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Set 0 to allow exit marking without any time limit.</p>
+                  </div>
+
                   <button 
                     onClick={createSession}
                     className="w-full py-3 px-4 rounded-lg font-semibold bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white transition-all duration-300 flex items-center justify-center gap-3 mt-6 hover:shadow-lg hover:-translate-y-0.5"
@@ -351,7 +368,7 @@ export default function DemoSessionPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
-                        Click "Create Session" to initialize
+                        Click Create Session to initialize
                       </li>
                       <li className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
